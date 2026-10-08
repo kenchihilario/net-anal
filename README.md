@@ -7,7 +7,6 @@ Features
 - **Detection Engine**: Correlates imported data and simulated events to produce security alerts.
 - **Training Captive Portal**: A local, benign web interface for demonstrating portal detection mechanisms.
 
-## Setup
 ```bash
 pip install -r requirements.txt
 python app/main.py
