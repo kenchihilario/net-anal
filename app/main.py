@@ -1,8 +1,10 @@
 import argparse
 import os
+import re
 import socket
 import subprocess
 import sys
+import time
 
 sys.path.append(
     os.path.dirname(
@@ -27,13 +29,13 @@ def print_banner():
     """)
 
 
-def run_command(command):
+def run_command(command, timeout=15):
     try:
         result = subprocess.run(
             command,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=timeout,
         )
 
         return result.stdout.strip()
@@ -43,41 +45,30 @@ def run_command(command):
 
 
 def get_network_info():
-    print("\n" + "=" * 65)
-    print("                     NETWORK INFORMATION")
-    print("=" * 65)
-
-    hostname = socket.gethostname()
-
-    print(f"\nHostname: {hostname}")
-
-    interfaces = run_command([
-        "ip",
-        "-br",
-        "addr",
-    ])
+    print("\nNETWORK INFORMATION")
+    print(f"\nHostname: {socket.gethostname()}")
 
     print("\nInterfaces:")
-    print(interfaces)
-
-    routes = run_command([
-        "ip",
-        "route",
-    ])
+    print(
+        run_command([
+            "ip",
+            "-br",
+            "addr",
+        ])
+    )
 
     print("\nRouting table:")
-    print(routes)
-
-    print()
+    print(
+        run_command([
+            "ip",
+            "route",
+        ])
+    )
 
 
 def discover_devices():
-    print("\n" + "=" * 65)
-    print("                    DEVICE DISCOVERY")
-    print("=" * 65)
-
-    print("\n[*] Looking for devices on the local network...")
-    print("[*] This may take a few seconds.\n")
+    print("\nDEVICE DISCOVERY")
+    print("\n[*] Reading local network neighbor table...\n")
 
     output = run_command([
         "ip",
@@ -86,20 +77,16 @@ def discover_devices():
     ])
 
     if not output:
-        print("[!] No neighbor entries found.")
-        print(
-            "[*] Try communicating with devices on the LAN "
-            "first, then run discovery again."
-        )
+        print("[!] No devices found.")
         return
 
     print(
         f"{'IP ADDRESS':<18}"
         f"{'MAC ADDRESS':<20}"
-        f"{'STATE':<12}"
+        f"{'STATE':<15}"
     )
 
-    print("-" * 65)
+    print("-" * 53)
 
     for line in output.splitlines():
         parts = line.split()
@@ -112,8 +99,10 @@ def discover_devices():
         state = "-"
 
         for index, value in enumerate(parts):
-            if value == "lladdr" and index + 1 < len(parts):
-                mac = parts[index + 1]
+
+            if value == "lladdr":
+                if index + 1 < len(parts):
+                    mac = parts[index + 1]
 
             if value in (
                 "REACHABLE",
@@ -128,24 +117,21 @@ def discover_devices():
         print(
             f"{ip:<18}"
             f"{mac:<20}"
-            f"{state:<12}"
+            f"{state:<15}"
         )
-
-    print()
 
 
 def port_scan(target):
-    print("\n" + "=" * 65)
-    print("                       PORT SCAN")
-    print("=" * 65)
-
+    print("\nPORT SCAN")
     print(f"\nTarget: {target}")
 
     try:
-        socket.gethostbyname(target)
+        target_ip = socket.gethostbyname(target)
     except socket.gaierror:
         print("[-] Could not resolve target.")
         return
+
+    print(f"IP:     {target_ip}")
 
     common_ports = {
         21: "FTP",
@@ -172,7 +158,7 @@ def port_scan(target):
         8443: "HTTPS-ALT",
     }
 
-    print("\nScanning common TCP ports...\n")
+    print("\n[*] Scanning common TCP ports...\n")
 
     found = []
 
@@ -186,7 +172,7 @@ def port_scan(target):
 
         try:
             result = sock.connect_ex(
-                (target, port)
+                (target_ip, port)
             )
 
             if result == 0:
@@ -216,18 +202,544 @@ def port_scan(target):
         print(
             f"{port:<10}"
             f"{service:<20}"
-            f"{'OPEN':<10}"
+            f"OPEN"
         )
 
     print(
-        f"\n[+] {len(found)} open common TCP port(s) found."
+        f"\n[+] {len(found)} open port(s) detected."
     )
 
 
+def get_wireless_interfaces():
+    output = run_command([
+        "iw",
+        "dev",
+    ])
+
+    interfaces = []
+
+    for line in output.splitlines():
+        line = line.strip()
+
+        if line.startswith("Interface "):
+            interface = line.split(
+                "Interface ",
+                1
+            )[1].strip()
+
+            interfaces.append(interface)
+
+    return interfaces
+
+
+def choose_wireless_interface():
+    interfaces = get_wireless_interfaces()
+
+    if not interfaces:
+        print(
+            "\n[-] No wireless interfaces detected."
+        )
+        return None
+
+    print("\nWIRELESS INTERFACES")
+
+    for index, interface in enumerate(
+        interfaces,
+        start=1,
+    ):
+        print(
+            f"  [{index}] {interface}"
+        )
+
+    while True:
+        choice = input(
+            "\n  Select wireless interface: "
+        ).strip()
+
+        try:
+            number = int(choice)
+
+            if 1 <= number <= len(interfaces):
+                return interfaces[number - 1]
+
+        except ValueError:
+            pass
+
+        print("[!] Invalid selection.")
+
+
+def choose_channel():
+    print("\nWI-FI CHANNEL")
+
+    print("""
+  [1] All channels
+  [2] Specific channel
+    """)
+
+    while True:
+        choice = input(
+            "  Select: "
+        ).strip()
+
+        if choice == "1":
+            return None
+
+        if choice == "2":
+            channel = input(
+                "\n  Enter channel: "
+            ).strip()
+
+            if channel.isdigit():
+                channel_number = int(channel)
+
+                if 1 <= channel_number <= 196:
+                    return channel_number
+
+            print("[!] Invalid channel.")
+            continue
+
+        print("[!] Invalid selection.")
+
+
+def start_monitor_mode(interface):
+    print(
+        f"\n[*] Preparing {interface} "
+        f"for monitor mode..."
+    )
+
+    print(
+        "[*] Stopping processes that may "
+        "interfere with monitor mode..."
+    )
+
+    subprocess.run(
+        [
+            "sudo",
+            "airmon-ng",
+            "check",
+            "kill",
+        ],
+        text=True,
+    )
+
+    time.sleep(1)
+
+    print(
+        f"\n[*] Starting monitor mode on {interface}..."
+    )
+
+    result = subprocess.run(
+        [
+            "sudo",
+            "airmon-ng",
+            "start",
+            interface,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    print(result.stdout)
+
+    if result.returncode != 0:
+        print(result.stderr)
+        return None
+
+    interfaces = get_wireless_interfaces()
+
+    monitor_interface = None
+
+    for name in interfaces:
+        if name.endswith("mon"):
+            monitor_interface = name
+            break
+
+    if monitor_interface is None:
+        possible_name = interface + "mon"
+
+        if possible_name in interfaces:
+            monitor_interface = possible_name
+
+    if monitor_interface is None:
+        print(
+            "[-] Could not determine monitor "
+            "interface."
+        )
+
+        return None
+
+    print(
+        f"[+] Monitor interface: "
+        f"{monitor_interface}"
+    )
+
+    return monitor_interface
+
+
+def stop_monitor_mode(monitor_interface):
+    print(
+        f"\n[*] Stopping monitor mode on "
+        f"{monitor_interface}..."
+    )
+
+    subprocess.run(
+        [
+            "sudo",
+            "airmon-ng",
+            "stop",
+            monitor_interface,
+        ],
+        text=True,
+    )
+
+    print(
+        "[*] Restarting NetworkManager..."
+    )
+
+    subprocess.run(
+        [
+            "sudo",
+            "systemctl",
+            "restart",
+            "NetworkManager",
+        ],
+        text=True,
+    )
+
+    print(
+        "[+] Wireless interface restored."
+    )
+
+
+def parse_airodump_csv(path):
+    networks = []
+
+    if not os.path.isfile(path):
+        return networks
+
+    try:
+        with open(
+            path,
+            "r",
+            encoding="utf-8",
+            errors="ignore",
+        ) as file:
+            lines = file.readlines()
+
+    except OSError:
+        return networks
+
+    section = False
+
+    for line in lines:
+
+        line = line.strip()
+
+        if line.startswith("BSSID"):
+            section = True
+            continue
+
+        if not section:
+            continue
+
+        if not line:
+            break
+
+        parts = [
+            item.strip()
+            for item in line.split(",")
+        ]
+
+        if len(parts) < 14:
+            continue
+
+        bssid = parts[0]
+        channel = parts[3]
+        power = parts[8]
+        privacy = parts[5]
+        essid = parts[13]
+
+        if not re.match(
+            r"^[0-9A-Fa-f:]{17}$",
+            bssid,
+        ):
+            continue
+
+        networks.append({
+            "bssid": bssid.upper(),
+            "channel": channel,
+            "power": power,
+            "privacy": privacy,
+            "essid": essid or "<hidden>",
+        })
+
+    return networks
+
+
+def choose_network(networks):
+    if not networks:
+        print(
+            "\n[!] No networks were recorded."
+        )
+        return None
+
+    print("\nDETECTED NETWORKS\n")
+
+    print(
+        f"{'ID':<5}"
+        f"{'BSSID':<20}"
+        f"{'CH':<5}"
+        f"{'PWR':<7}"
+        f"{'SECURITY':<12}"
+        f"ESSID"
+    )
+
+    print("-" * 75)
+
+    for index, network in enumerate(
+        networks,
+        start=1,
+    ):
+        print(
+            f"{index:<5}"
+            f"{network['bssid']:<20}"
+            f"{network['channel']:<5}"
+            f"{network['power']:<7}"
+            f"{network['privacy']:<12}"
+            f"{network['essid']}"
+        )
+
+    while True:
+        choice = input(
+            "\n  Select network: "
+        ).strip()
+
+        try:
+            number = int(choice)
+
+            if 1 <= number <= len(networks):
+                return networks[number - 1]
+
+        except ValueError:
+            pass
+
+        print("[!] Invalid selection.")
+
+
+def passive_capture(
+    monitor_interface,
+    network,
+):
+    bssid = network["bssid"]
+    channel = network["channel"]
+    essid = network["essid"]
+
+    print(
+        f"\n[*] Selected: {essid}"
+    )
+
+    print(
+        f"[*] BSSID: {bssid}"
+    )
+
+    print(
+        f"[*] Channel: {channel}"
+    )
+
+    filename = input(
+        "\n  Capture filename "
+        "(without extension): "
+    ).strip()
+
+    if not filename:
+        filename = "kenchi-capture"
+
+    filename = os.path.basename(
+        filename
+    )
+
+    output_prefix = os.path.abspath(
+        filename
+    )
+
+    print(
+        f"\n[*] Starting passive capture..."
+    )
+
+    print(
+        f"[*] Saving capture to: "
+        f"{output_prefix}-01.cap"
+    )
+
+    print(
+        "[*] No deauthentication frames "
+        "will be transmitted."
+    )
+
+    print(
+        "\n[*] Press Ctrl+C to stop.\n"
+    )
+
+    command = [
+        "sudo",
+        "airodump-ng",
+        "--bssid",
+        bssid,
+        "--channel",
+        str(channel),
+        "--write",
+        output_prefix,
+        monitor_interface,
+    ]
+
+    try:
+        subprocess.run(command)
+
+    except KeyboardInterrupt:
+        print(
+            "\n\n[*] Passive capture stopped."
+        )
+
+
+def ask_passive_capture(
+    monitor_interface,
+    csv_path,
+):
+    networks = parse_airodump_csv(
+        csv_path
+    )
+
+    print()
+
+    answer = input(
+        "Do you want to select a network "
+        "for passive capture? [y/N]: "
+    ).strip().lower()
+
+    if answer not in (
+        "y",
+        "yes",
+    ):
+        return
+
+    network = choose_network(
+        networks
+    )
+
+    if not network:
+        return
+
+    passive_capture(
+        monitor_interface,
+        network,
+    )
+
+
+def wifi_scan():
+    interface = choose_wireless_interface()
+
+    if not interface:
+        return
+
+    channel = choose_channel()
+
+    monitor_interface = start_monitor_mode(
+        interface
+    )
+
+    if not monitor_interface:
+        print(
+            "\n[-] Failed to start monitor mode."
+        )
+        return
+
+    print("\nWI-FI SCANNER")
+
+    print(
+        f"\n[*] Interface: "
+        f"{monitor_interface}"
+    )
+
+    if channel is None:
+        print(
+            "[*] Channel mode: all channels"
+        )
+
+    else:
+        print(
+            f"[*] Channel: {channel}"
+        )
+
+        subprocess.run(
+            [
+                "sudo",
+                "iw",
+                "dev",
+                monitor_interface,
+                "set",
+                "channel",
+                str(channel),
+            ],
+            text=True,
+        )
+
+    capture_prefix = os.path.abspath(
+        "kenchi-wifi-scan"
+    )
+
+    csv_path = (
+        capture_prefix
+        + "-01.csv"
+    )
+
+    print(
+        "\n[*] Starting airodump-ng..."
+    )
+
+    print(
+        "[*] Press Ctrl+C to stop scanning.\n"
+    )
+
+    try:
+        command = [
+            "sudo",
+            "airodump-ng",
+            "--write",
+            capture_prefix,
+            "--output-format",
+            "csv",
+        ]
+
+        if channel is not None:
+            command.extend([
+                "--channel",
+                str(channel),
+            ])
+
+        command.append(
+            monitor_interface
+        )
+
+        subprocess.run(command)
+
+    except KeyboardInterrupt:
+        print(
+            "\n\n[*] Scan stopped."
+        )
+
+    finally:
+        ask_passive_capture(
+            monitor_interface,
+            csv_path,
+        )
+
+        stop_monitor_mode(
+            monitor_interface
+        )
+
+
 def analyze_pcap(path):
-    print("\n" + "=" * 65)
-    print("                      PCAP ANALYSIS")
-    print("=" * 65)
+    print("\nPCAP ANALYSIS")
 
     importer = PcapImporter(path)
 
@@ -237,38 +749,47 @@ def analyze_pcap(path):
     stats = importer.get_summary()
 
     print("\nCapture statistics:")
+
     print(
         f"  Total packets:       "
         f"{stats['total_packets']:,}"
     )
+
     print(
         f"  Wi-Fi packets:       "
         f"{stats['wifi_packets']:,}"
     )
+
     print(
         f"  Management frames:   "
         f"{stats['management_frames']:,}"
     )
+
     print(
         f"  Control frames:      "
         f"{stats['control_frames']:,}"
     )
+
     print(
         f"  Data frames:         "
         f"{stats['data_frames']:,}"
     )
+
     print(
         f"  Beacon frames:       "
         f"{stats['beacon_frames']:,}"
     )
+
     print(
         f"  Deauthentication:    "
         f"{stats['deauthentication_frames']:,}"
     )
+
     print(
         f"  Disassociation:      "
         f"{stats['disassociation_frames']:,}"
     )
+
     print(
         f"  Unique BSSIDs:       "
         f"{stats['unique_bssid_count']:,}"
@@ -277,11 +798,18 @@ def analyze_pcap(path):
     print("\nDetected SSIDs:")
 
     if not stats["ssids"]:
-        print("  No beacon SSIDs found.")
+        print(
+            "  No beacon SSIDs found."
+        )
 
     else:
         for ssid, info in stats["ssids"].items():
-            display = ssid if ssid else "<hidden>"
+
+            display = (
+                ssid
+                if ssid
+                else "<hidden>"
+            )
 
             print(
                 f"  {display:<25} "
@@ -289,22 +817,26 @@ def analyze_pcap(path):
             )
 
     engine = DetectionEngine()
-    engine.analyze_pcap_stats(stats)
+
+    engine.analyze_pcap_stats(
+        stats
+    )
 
     alerts = engine.get_alerts()
 
-    print("\n" + "-" * 65)
-    print("                         ALERTS")
-    print("-" * 65)
+    print("\nALERTS")
 
     if not alerts:
-        print("\n[+] No configured anomalies detected.")
+        print(
+            "\n[+] No configured anomalies detected."
+        )
 
     else:
         for number, alert in enumerate(
             alerts,
             start=1,
         ):
+
             print(
                 f"\n[{number}] "
                 f"[{alert['severity']}] "
@@ -317,59 +849,81 @@ def analyze_pcap(path):
 
 
 def interactive_menu():
+
     while True:
-        print("\n" + "=" * 65)
-        print("                  KENCHI NETWORK ANALYZER")
-        print("=" * 65)
 
         print("""
   [1] Network Information
   [2] Discover Local Devices
   [3] Scan TCP Ports
-  [4] Analyze PCAP
-  [5] Exit
+  [4] Wi-Fi Monitor Mode / Scan
+  [5] Analyze PCAP
+  [6] Exit
         """)
 
-        choice = input("  Select an option: ").strip()
+        choice = input(
+            "  Select an option: "
+        ).strip()
 
         if choice == "1":
+
             get_network_info()
 
         elif choice == "2":
+
             discover_devices()
 
         elif choice == "3":
+
             target = input(
                 "\n  Enter authorized target IP/hostname: "
             ).strip()
 
             if target:
                 port_scan(target)
+
             else:
-                print("[!] Target cannot be empty.")
+                print(
+                    "[!] Target cannot be empty."
+                )
 
         elif choice == "4":
+
+            wifi_scan()
+
+        elif choice == "5":
+
             path = input(
                 "\n  Enter PCAP/PCAPNG path: "
             ).strip()
 
             if path:
-                analyze_pcap(path)
-            else:
-                print("[!] Path cannot be empty.")
 
-        elif choice == "5":
-            print("\n[+] Exiting Kenchi Network Analyzer.")
+                analyze_pcap(path)
+
+            else:
+
+                print(
+                    "[!] Path cannot be empty."
+                )
+
+        elif choice == "6":
+
+            print(
+                "\n[+] Exiting Kenchi Network Analyzer."
+            )
+
             break
 
         else:
+
             print(
-                "\n[!] Invalid option. "
-                "Choose 1-5."
+                "\n[!] Invalid option."
             )
 
 
 def parse_args():
+
     parser = argparse.ArgumentParser(
         description="Kenchi Network Analyzer"
     )
@@ -377,52 +931,71 @@ def parse_args():
     parser.add_argument(
         "--info",
         action="store_true",
-        help="Show local network information.",
+        help="Show network information.",
     )
 
     parser.add_argument(
         "--discover",
         action="store_true",
-        help="Show devices known to the local network neighbor table.",
+        help="Show local network devices.",
     )
 
     parser.add_argument(
         "--ports",
         metavar="TARGET",
-        help="Scan common TCP ports on an authorized target.",
+        help="Scan common TCP ports.",
+    )
+
+    parser.add_argument(
+        "--wifi",
+        action="store_true",
+        help="Start Wi-Fi monitor mode and scanner.",
     )
 
     parser.add_argument(
         "--pcap",
         metavar="FILE",
-        help="Analyze a PCAP or PCAPNG file.",
+        help="Analyze PCAP/PCAPNG.",
     )
 
     return parser.parse_args()
 
 
 def main():
+
     print_banner()
 
     args = parse_args()
 
     if args.info:
+
         get_network_info()
         return 0
 
     if args.discover:
+
         discover_devices()
         return 0
 
     if args.ports:
+
         port_scan(args.ports)
         return 0
 
+    if args.wifi:
+
+        wifi_scan()
+        return 0
+
     if args.pcap:
+
         if not os.path.isfile(args.pcap):
+
             print(
-                f"\n[-] File not found: {args.pcap}"
+                f"\n[-] File not found: "
+                f"{args.pcap}"
             )
+
             return 1
 
         analyze_pcap(args.pcap)
