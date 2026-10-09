@@ -1,15 +1,21 @@
-# Wi-Fi Security Analysis and Training Platform
+Something I made on my free time.
 
-A defensive, isolated laboratory tool for demonstrating wireless attack detection and emulation using offline PCAP files and simulated events.
+*   **Language:** Python 3
+*   **Core Systems:** Network Sockets, Packet Sniffing / Inspection Architecture
+*   **Environment Handling:** Virtualenv (venv)
 
-## Features
-- **Offline PCAP Analysis**: Import and analyze `.pcap` files without interacting with live wireless hardware.
-- **Attack Simulation**: Generate synthetic, local event logs representing common wireless attacks for detection training.
-- **Detection Engine**: Correlates imported data and simulated events to produce security alerts.
-- **Training Captive Portal**: A local, benign web interface for demonstrating portal detection mechanisms.
+Because this tool performs low-level network inspections, it requires elevated system permissions (`sudo`) to bind to raw sockets or interfaces.
 
-## Setup
+### Installation & Local Setup
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com
+   cd net-anal
+   ```
 ```bash
 pip install -r requirements.txt
-python app/main.py
+source .venv/bin/activate
+sudo .venv/bin/python app/main.py
 ```
+Still in development..
