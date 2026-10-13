@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Captures (keep directory, ignore dumps)
+captures/*.pcap
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
